@@ -1,0 +1,19 @@
+{
+  "name": "data-asset-backend",
+  "version": "1.0.0",
+  "description": "公共数据资产全过程管理平台后端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "better-sqlite3": "^9.4.3",
+    "fastify": "^4.26.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

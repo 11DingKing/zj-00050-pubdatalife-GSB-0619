@@ -1,0 +1,34 @@
+{
+  "name": "data-asset-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@ant-design/charts": "^2.1.0",
+    "@ant-design/icons": "^6.2.5",
+    "antd": "^5.14.0",
+    "dayjs": "^1.11.10",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.8.1"
+  },
+  "scripts": {
+    "dev": "react-scripts start",
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  },
+  "proxy": "http://localhost:3001",
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
