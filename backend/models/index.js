@@ -40,7 +40,18 @@ const RISK_WEIGHTS = {
 const WARNING_STATUS = {
   PENDING: "pending",
   HANDLING: "handling",
+  REVIEWING: "reviewing",
   RESOLVED: "resolved",
+};
+
+const RISK_LEVEL_ORDER = ["low", "medium", "high", "critical"];
+
+const SLA_PENDING_ESCALATION_DAYS = 3;
+
+const REVIEW_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
 };
 
 const COLLABORATION_ACTIONS = {
@@ -73,6 +84,9 @@ module.exports = {
   RISK_THRESHOLD,
   RISK_WEIGHTS,
   WARNING_STATUS,
+  RISK_LEVEL_ORDER,
+  SLA_PENDING_ESCALATION_DAYS,
+  REVIEW_STATUS,
   COLLABORATION_ACTIONS,
   OWNERSHIP_STATUS,
   TABLE_NAMES,

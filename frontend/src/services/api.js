@@ -19,6 +19,7 @@ export const api = {
   getRiskWarnings: riskService.getRiskWarnings.bind(riskService),
   getAssetRiskInfo: riskService.getAssetRiskInfo.bind(riskService),
   handleWarning: riskService.handleWarning.bind(riskService),
+  reviewWarning: riskService.reviewWarning.bind(riskService),
   recalculateRisk: riskService.recalculateRisk.bind(riskService),
   getRiskOverview: riskService.getRiskOverview.bind(riskService),
   getAssetsWithWarnings: riskService.getAssetsWithWarnings.bind(riskService),

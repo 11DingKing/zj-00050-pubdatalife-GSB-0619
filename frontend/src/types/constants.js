@@ -33,6 +33,7 @@ export const RISK_THRESHOLD = 60;
 export const WARNING_STATUS = {
   PENDING: "pending",
   HANDLING: "handling",
+  REVIEWING: "reviewing",
   RESOLVED: "resolved",
 };
 
@@ -80,6 +81,7 @@ export const statusColors = {
 export const warningStatusColors = {
   pending: { color: "#ff4d4f", label: "待处理" },
   handling: { color: "#1890ff", label: "处理中" },
+  reviewing: { color: "#722ed1", label: "待复核" },
   resolved: { color: "#52c41a", label: "已解决" },
 };
 
