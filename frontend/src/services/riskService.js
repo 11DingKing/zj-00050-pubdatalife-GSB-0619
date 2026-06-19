@@ -20,6 +20,17 @@ export const riskService = {
     });
   },
 
+  async reviewWarning(warningId, data) {
+    return request(`${API_BASE}/risk/warnings/${warningId}/review`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  async getWarningEscalations(warningId) {
+    return request(`${API_BASE}/risk/warnings/${warningId}/escalations`);
+  },
+
   async recalculateRisk(assetId) {
     return request(`${API_BASE}/risk/asset/${assetId}/recalculate`, {
       method: "POST",

@@ -80,10 +80,13 @@ export const statusColors = {
 export const warningStatusColors = {
   pending: { color: "#ff4d4f", label: "待处理" },
   handling: { color: "#1890ff", label: "处理中" },
+  pending_review: { color: "#722ed1", label: "待复核" },
   resolved: { color: "#52c41a", label: "已解决" },
 };
 
 export const actionTypeLabels = {
   stage_complete: { color: "green", label: "阶段完成" },
   urge: { color: "orange", label: "催办" },
+  meeting: { color: "purple", label: "协调会" },
+  direct_advance: { color: "cyan", label: "直接推进" },
 };

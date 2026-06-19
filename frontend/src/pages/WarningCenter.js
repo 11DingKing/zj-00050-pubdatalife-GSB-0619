@@ -15,6 +15,9 @@ import {
   Badge,
   Tooltip,
   message,
+  Popover,
+  Descriptions,
+  Timeline,
 } from "antd";
 import {
   WarningOutlined,
@@ -23,6 +26,11 @@ import {
   ClockCircleOutlined,
   TeamOutlined,
   ThunderboltOutlined,
+  ArrowUpOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  AuditOutlined,
+  RiseOutlined,
 } from "@ant-design/icons";
 import { api } from "../services/api";
 import { RiskGauge } from "../components/charts";
@@ -51,8 +59,12 @@ const WarningCenter = () => {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({});
   const [handleModalVisible, setHandleModalVisible] = useState(false);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [escalationsVisible, setEscalationsVisible] = useState(false);
   const [selectedWarning, setSelectedWarning] = useState(null);
+  const [currentEscalations, setCurrentEscalations] = useState([]);
   const [form] = Form.useForm();
+  const [reviewForm] = Form.useForm();
 
   useEffect(() => {
     loadInitialData();
@@ -118,14 +130,32 @@ const WarningCenter = () => {
     setHandleModalVisible(true);
   };
 
+  const handleReviewAction = (warning) => {
+    setSelectedWarning(warning);
+    reviewForm.resetFields();
+    setReviewModalVisible(true);
+  };
+
+  const handleViewEscalations = async (warning) => {
+    setSelectedWarning(warning);
+    try {
+      const data = await api.getWarningEscalations(warning.id);
+      setCurrentEscalations(data.escalations || []);
+      setEscalationsVisible(true);
+    } catch (error) {
+      message.error("加载升级记录失败");
+    }
+  };
+
   const submitHandle = async (values) => {
     try {
       const result = await api.handleWarning(selectedWarning.id, {
         action_type: values.action_type,
         remark: values.remark,
+        rectification_result: values.rectification_result,
       });
       if (result.success) {
-        message.success("处置已提交，风险评分已重新计算");
+        message.success("处置已提交，等待复核确认");
         setHandleModalVisible(false);
         loadFilteredData();
       } else {
@@ -133,36 +163,81 @@ const WarningCenter = () => {
       }
     } catch (error) {
       console.error("Failed to handle warning:", error);
-      message.error("处置失败，请重试");
+      message.error(error?.message || "处置失败，请重试");
     }
+  };
+
+  const submitReview = async (values) => {
+    try {
+      const result = await api.reviewWarning(selectedWarning.id, {
+        approved: values.approved,
+        review_remark: values.review_remark,
+      });
+      if (result.success) {
+        message.success(result.message);
+        setReviewModalVisible(false);
+        loadFilteredData();
+      } else {
+        message.error(result.error || "复核失败");
+      }
+    } catch (error) {
+      console.error("Failed to review warning:", error);
+      message.error(error?.message || "复核失败，请重试");
+    }
+  };
+
+  const getSlaPendingDays = (warning) => {
+    if (warning.status !== "pending") return 0;
+    const refTime = warning.last_escalated_at || warning.created_at;
+    const refDate = dayjs(refTime);
+    return dayjs().diff(refDate, "day");
   };
 
   const columns = [
     {
-      title: "预警状态",
+      title: "闭环状态",
       dataIndex: "status",
       key: "status",
-      width: 100,
-      render: (status) => (
-        <Tag color={warningStatusColors[status]?.color}>
-          {warningStatusColors[status]?.label}
-        </Tag>
+      width: 110,
+      render: (status, record) => (
+        <Space direction="vertical" size={0}>
+          <Tag color={warningStatusColors[status]?.color} style={{ margin: 0 }}>
+            {warningStatusColors[status]?.label}
+          </Tag>
+          {record.has_escalated && (
+            <Tooltip title={`已升级 ${record.escalation_count} 次`}>
+              <Tag color="red" icon={<ArrowUpOutlined />} style={{ margin: 0, marginTop: 2 }}>
+                已升级
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
       ),
     },
     {
       title: "风险等级",
       dataIndex: "risk_level",
       key: "risk_level",
-      width: 100,
-      render: (level) => {
+      width: 130,
+      render: (level, record) => {
         const config = riskLevelConfig[level];
+        const originalLevel = record.original_risk_level;
         return (
-          <Tag
-            color={config?.color}
-            style={{ fontWeight: "bold", fontSize: 14 }}
-          >
-            <ExclamationCircleOutlined /> {config?.label}
-          </Tag>
+          <Space direction="vertical" size={0}>
+            <Tag
+              color={config?.color}
+              style={{ fontWeight: "bold", fontSize: 14, margin: 0 }}
+            >
+              <ExclamationCircleOutlined /> {config?.label}
+            </Tag>
+            {originalLevel && originalLevel !== level && (
+              <Tooltip title={`原始等级: ${riskLevelConfig[originalLevel]?.label || originalLevel}`}>
+                <Tag color="default" style={{ margin: 0, marginTop: 2, fontSize: 12 }}>
+                  <RiseOutlined /> 从 {riskLevelConfig[originalLevel]?.label} 升级
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
         );
       },
     },
@@ -190,6 +265,11 @@ const WarningCenter = () => {
           <Badge dot color={riskLevelColors[record.risk_level]}>
             <span style={{ fontWeight: 500 }}>{text}</span>
           </Badge>
+          {record.status === "pending" && getSlaPendingDays(record) >= 2 && (
+            <Tooltip title={`已待处理 ${getSlaPendingDays(record)} 天，${3 - getSlaPendingDays(record)} 天后自动升级`}>
+              <ClockCircleOutlined style={{ color: "#ff4d4f" }} />
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -207,28 +287,50 @@ const WarningCenter = () => {
       render: (stage) => <Tag color="blue">{stage}</Tag>,
     },
     {
-      title: "超期天数",
-      dataIndex: "overdue_days",
-      key: "overdue",
-      width: 100,
-      render: (days) =>
-        days > 0 ? (
-          <span style={{ color: "#ff4d4f" }}>
-            <ClockCircleOutlined /> {days}天
+      title: "超期/停滞",
+      key: "days",
+      width: 130,
+      render: (_, record) => (
+        <Space direction="vertical" size={0}>
+          {record.overdue_days > 0 ? (
+            <span style={{ color: "#ff4d4f", fontSize: 12 }}>
+              <ClockCircleOutlined /> 超期 {record.overdue_days}天
+            </span>
+          ) : (
+            <span style={{ color: "#52c41a", fontSize: 12 }}>超期正常</span>
+          )}
+          <span style={{ color: record.stage_stuck_days > 7 ? "#fa8c16" : "#999", fontSize: 12 }}>
+            停滞 {record.stage_stuck_days}天
           </span>
-        ) : (
-          <span style={{ color: "#52c41a" }}>正常</span>
-        ),
+        </Space>
+      ),
     },
     {
-      title: "停滞天数",
-      dataIndex: "stage_stuck_days",
-      key: "stuck",
-      width: 100,
-      render: (days) => (
-        <span style={{ color: days > 7 ? "#fa8c16" : "inherit" }}>
-          {days}天
-        </span>
+      title: "整改/复核",
+      key: "closure",
+      width: 160,
+      render: (_, record) => (
+        <Space direction="vertical" size={0} style={{ fontSize: 12 }}>
+          {record.rectification_result && (
+            <Tooltip title={record.rectification_result}>
+              <span style={{ color: "#1890ff" }}>
+                <CheckCircleOutlined /> 已提交整改
+              </span>
+            </Tooltip>
+          )}
+          {record.review_status === "rejected" && record.review_remark && (
+            <Tooltip title={`驳回原因: ${record.review_remark}`}>
+              <span style={{ color: "#ff4d4f" }}>
+                <CloseCircleOutlined /> 复核驳回
+              </span>
+            </Tooltip>
+          )}
+          {record.review_status === "approved" && (
+            <span style={{ color: "#52c41a" }}>
+              <CheckCircleOutlined /> 复核通过
+            </span>
+          )}
+        </Space>
       ),
     },
     {
@@ -236,7 +338,7 @@ const WarningCenter = () => {
       dataIndex: "suggested_actions",
       key: "actions",
       ellipsis: true,
-      width: 200,
+      width: 180,
       render: (text) => (
         <Tooltip title={text}>
           <span>{text || "-"}</span>
@@ -247,25 +349,64 @@ const WarningCenter = () => {
       title: "预警时间",
       dataIndex: "created_at",
       key: "created_at",
-      width: 160,
-      render: (text) => dayjs(text).format("YYYY-MM-DD HH:mm"),
+      width: 150,
+      render: (text, record) => (
+        <Space direction="vertical" size={0}>
+          <span>{dayjs(text).format("MM-DD HH:mm")}</span>
+          {record.has_escalated && (
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0, fontSize: 12, height: "auto" }}
+              onClick={() => handleViewEscalations(record)}
+            >
+              查看升级记录
+            </Button>
+          )}
+        </Space>
+      ),
     },
     {
       title: "操作",
       key: "action",
-      width: 120,
+      width: 150,
       fixed: "right",
-      render: (_, record) => (
-        <Button
-          type="primary"
-          size="small"
-          icon={<ThunderboltOutlined />}
-          onClick={() => handleWarningAction(record)}
-          disabled={record.status === "resolved"}
-        >
-          处置
-        </Button>
-      ),
+      render: (_, record) => {
+        if (record.status === "pending_review") {
+          return (
+            <Button
+              type="primary"
+              size="small"
+              icon={<AuditOutlined />}
+              onClick={() => handleReviewAction(record)}
+            >
+              复核
+            </Button>
+          );
+        }
+        if (record.status === "resolved") {
+          return <Tag color="green">已闭环</Tag>;
+        }
+        return (
+          <Space>
+            <Button
+              type="primary"
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => handleWarningAction(record)}
+            >
+              处置
+            </Button>
+            {record.has_escalated && (
+              <Tooltip title="SLA超时已升级">
+                <Tag color="red" icon={<ArrowUpOutlined />}>
+                  {record.escalation_count}
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -273,11 +414,16 @@ const WarningCenter = () => {
     <div>
       <h2 style={{ marginBottom: 20 }}>
         <WarningOutlined style={{ color: "#ff4d4f" }} /> 风险预警中心
+        <Tooltip title="SLA规则：待处理预警超过3天未进入处置，自动升级风险等级（低→中→高→极高）">
+          <Tag color="orange" style={{ marginLeft: 12, fontSize: 12 }}>
+            <ClockCircleOutlined /> SLA 3天自动升级
+          </Tag>
+        </Tooltip>
       </h2>
 
       {overview && (
         <Row gutter={16} style={{ marginBottom: 20 }}>
-          <Col span={4}>
+          <Col span={3}>
             <Card>
               <Statistic
                 title="预警总数"
@@ -287,7 +433,7 @@ const WarningCenter = () => {
               />
             </Card>
           </Col>
-          <Col span={4}>
+          <Col span={3}>
             <Card>
               <Statistic
                 title="极高风险"
@@ -299,7 +445,47 @@ const WarningCenter = () => {
               />
             </Card>
           </Col>
-          <Col span={4}>
+          <Col span={3}>
+            <Card>
+              <Statistic
+                title="待处理"
+                value={overview.stats.pending}
+                prefix={<ClockCircleOutlined style={{ color: "#ff4d4f" }} />}
+                valueStyle={{ color: "#ff4d4f" }}
+              />
+            </Card>
+          </Col>
+          <Col span={3}>
+            <Card>
+              <Statistic
+                title="处置中"
+                value={overview.stats.handling}
+                prefix={<TeamOutlined style={{ color: "#1890ff" }} />}
+                valueStyle={{ color: "#1890ff" }}
+              />
+            </Card>
+          </Col>
+          <Col span={3}>
+            <Card>
+              <Statistic
+                title="待复核"
+                value={overview.stats.pending_review || 0}
+                prefix={<AuditOutlined style={{ color: "#722ed1" }} />}
+                valueStyle={{ color: "#722ed1" }}
+              />
+            </Card>
+          </Col>
+          <Col span={3}>
+            <Card>
+              <Statistic
+                title="已升级"
+                value={overview.stats.escalated || 0}
+                prefix={<ArrowUpOutlined style={{ color: "#fa541c" }} />}
+                valueStyle={{ color: "#fa541c" }}
+              />
+            </Card>
+          </Col>
+          <Col span={3}>
             <Card>
               <Statistic
                 title="高风险"
@@ -311,7 +497,7 @@ const WarningCenter = () => {
               />
             </Card>
           </Col>
-          <Col span={4}>
+          <Col span={3}>
             <Card>
               <Statistic
                 title="中风险"
@@ -320,26 +506,6 @@ const WarningCenter = () => {
                   <ExclamationCircleOutlined style={{ color: "#faad14" }} />
                 }
                 valueStyle={{ color: "#faad14" }}
-              />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card>
-              <Statistic
-                title="待处理"
-                value={overview.stats.pending}
-                prefix={<ClockCircleOutlined style={{ color: "#ff4d4f" }} />}
-                valueStyle={{ color: "#ff4d4f" }}
-              />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card>
-              <Statistic
-                title="处理中"
-                value={overview.stats.handling}
-                prefix={<TeamOutlined style={{ color: "#1890ff" }} />}
-                valueStyle={{ color: "#1890ff" }}
               />
             </Card>
           </Col>
@@ -380,6 +546,21 @@ const WarningCenter = () => {
           </Space>
 
           <Space>
+            <span style={{ fontWeight: 500 }}>闭环状态：</span>
+            <Select
+              style={{ width: 120 }}
+              allowClear
+              placeholder="选择状态"
+              onChange={(value) => handleFilterChange("status", value)}
+            >
+              <Option value="pending">待处理</Option>
+              <Option value="handling">处置中</Option>
+              <Option value="pending_review">待复核</Option>
+              <Option value="resolved">已解决</Option>
+            </Select>
+          </Space>
+
+          <Space>
             <span style={{ fontWeight: 500 }}>当前阶段：</span>
             <Select
               style={{ width: 140 }}
@@ -395,20 +576,6 @@ const WarningCenter = () => {
             </Select>
           </Space>
 
-          <Space>
-            <span style={{ fontWeight: 500 }}>处理状态：</span>
-            <Select
-              style={{ width: 120 }}
-              allowClear
-              placeholder="选择状态"
-              onChange={(value) => handleFilterChange("status", value)}
-            >
-              <Option value="pending">待处理</Option>
-              <Option value="handling">处理中</Option>
-              <Option value="resolved">已解决</Option>
-            </Select>
-          </Space>
-
           <Button onClick={loadFilteredData} type="primary">
             刷新
           </Button>
@@ -421,7 +588,7 @@ const WarningCenter = () => {
           dataSource={warnings}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1600 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -436,7 +603,7 @@ const WarningCenter = () => {
         open={handleModalVisible}
         onCancel={() => setHandleModalVisible(false)}
         footer={null}
-        width={600}
+        width={650}
       >
         {selectedWarning && (
           <div style={{ marginBottom: 20 }}>
@@ -445,15 +612,38 @@ const WarningCenter = () => {
                 <div style={{ color: "#666", marginBottom: 4 }}>资产名称</div>
                 <div style={{ fontWeight: 500 }}>
                   {selectedWarning.asset_name}
+                  {selectedWarning.has_escalated && (
+                    <Tag color="red" style={{ marginLeft: 8 }}>
+                      <ArrowUpOutlined /> 已升级 {selectedWarning.escalation_count} 次
+                    </Tag>
+                  )}
                 </div>
               </Col>
               <Col span={12}>
-                <div style={{ color: "#666", marginBottom: 4 }}>风险等级</div>
+                <div style={{ color: "#666", marginBottom: 4 }}>当前风险等级</div>
                 <Tag color={riskLevelConfig[selectedWarning.risk_level]?.color}>
                   {riskLevelConfig[selectedWarning.risk_level]?.label}
+                  {selectedWarning.original_risk_level && selectedWarning.original_risk_level !== selectedWarning.risk_level && (
+                    <span style={{ marginLeft: 4, fontSize: 12, opacity: 0.8 }}>
+                      (原: {riskLevelConfig[selectedWarning.original_risk_level]?.label})
+                    </span>
+                  )}
                 </Tag>
               </Col>
             </Row>
+            {selectedWarning.rectification_result && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ color: "#666", marginBottom: 4 }}>上一次整改结果</div>
+                <div style={{ background: "#fff7e6", padding: 10, borderRadius: 4, borderLeft: "3px solid #fa8c16" }}>
+                  {selectedWarning.rectification_result}
+                  {selectedWarning.review_remark && (
+                    <div style={{ marginTop: 8, color: "#ff4d4f", fontSize: 12 }}>
+                      <CloseCircleOutlined /> 驳回意见: {selectedWarning.review_remark}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             <Row gutter={16}>
               <Col span={24}>
                 <div style={{ color: "#666", marginBottom: 4 }}>建议动作</div>
@@ -500,18 +690,162 @@ const WarningCenter = () => {
           </Form.Item>
 
           <Form.Item name="remark" label="处置说明">
-            <TextArea rows={4} placeholder="请输入处置说明..." />
+            <TextArea rows={2} placeholder="请输入处置说明（可选）..." />
+          </Form.Item>
+
+          <Form.Item
+            name="rectification_result"
+            label={
+              <span>
+                <span style={{ color: "#ff4d4f" }}>*</span> 整改结果
+                <Tag color="orange" style={{ marginLeft: 8 }}>必填</Tag>
+              </span>
+            }
+            rules={[
+              { required: true, message: "请填写整改结果（闭环必需）" },
+              { min: 10, message: "整改结果至少10个字，确保处置到位" },
+            ]}
+          >
+            <TextArea
+              rows={4}
+              placeholder="请详细填写整改措施和完成情况，提交后将进入复核流程，复核通过后预警才算正式闭环..."
+            />
           </Form.Item>
 
           <Form.Item style={{ marginBottom: 0, textAlign: "right" }}>
             <Space>
               <Button onClick={() => setHandleModalVisible(false)}>取消</Button>
               <Button type="primary" htmlType="submit">
-                提交处置
+                提交处置（进入复核）
               </Button>
             </Space>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="预警复核"
+        open={reviewModalVisible}
+        onCancel={() => setReviewModalVisible(false)}
+        footer={null}
+        width={600}
+      >
+        {selectedWarning && (
+          <div style={{ marginBottom: 20 }}>
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="资产名称">{selectedWarning.asset_name}</Descriptions.Item>
+              <Descriptions.Item label="风险等级">
+                <Tag color={riskLevelConfig[selectedWarning.risk_level]?.color}>
+                  {riskLevelConfig[selectedWarning.risk_level]?.label}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="处置说明">
+                <span>{selectedWarning.handling_remark || "无"}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="整改结果">
+                <div style={{ background: "#f6ffed", padding: 10, borderRadius: 4 }}>
+                  {selectedWarning.rectification_result}
+                </div>
+              </Descriptions.Item>
+            </Descriptions>
+          </div>
+        )}
+
+        <Form form={reviewForm} layout="vertical" onFinish={submitReview}>
+          <Form.Item
+            name="approved"
+            label="复核结论"
+            rules={[{ required: true, message: "请选择复核结论" }]}
+          >
+            <Select placeholder="请选择复核结论">
+              <Option value={true}>
+                <Space>
+                  <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                  <span>复核通过（闭环）</span>
+                </Space>
+              </Option>
+              <Option value={false}>
+                <Space>
+                  <CloseCircleOutlined style={{ color: "#ff4d4f" }} />
+                  <span>驳回重改</span>
+                </Space>
+              </Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prevValues, currentValues) => prevValues.approved !== currentValues.approved}
+          >
+            {({ getFieldValue }) =>
+              getFieldValue("approved") === false ? (
+                <Form.Item
+                  name="review_remark"
+                  label={
+                    <span>
+                      <span style={{ color: "#ff4d4f" }}>*</span> 驳回意见
+                    </span>
+                  }
+                  rules={[{ required: true, message: "驳回时必须填写意见" }]}
+                >
+                  <TextArea rows={3} placeholder="请说明驳回原因，要求重新处置..." />
+                </Form.Item>
+              ) : (
+                <Form.Item name="review_remark" label="复核备注（可选）">
+                  <TextArea rows={2} placeholder="可以填写复核确认意见..." />
+                </Form.Item>
+              )
+            }
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: "right" }}>
+            <Space>
+              <Button onClick={() => setReviewModalVisible(false)}>取消</Button>
+              <Button type="primary" htmlType="submit">
+                提交复核结果
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="预警升级记录"
+        open={escalationsVisible}
+        onCancel={() => setEscalationsVisible(false)}
+        footer={null}
+        width={550}
+      >
+        {currentEscalations.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
+            暂无升级记录
+          </div>
+        ) : (
+          <Timeline
+            items={currentEscalations.map((esc) => ({
+              color: "red",
+              children: (
+                <div>
+                  <Space>
+                    <Tag color={riskLevelConfig[esc.from_level]?.color}>
+                      {riskLevelConfig[esc.from_level]?.label}
+                    </Tag>
+                    <ArrowUpOutlined style={{ color: "#ff4d4f" }} />
+                    <Tag color={riskLevelConfig[esc.to_level]?.color}>
+                      {riskLevelConfig[esc.to_level]?.label}
+                    </Tag>
+                  </Space>
+                  <div style={{ color: "#666", fontSize: 12, marginTop: 4 }}>
+                    {dayjs(esc.escalated_at).format("YYYY-MM-DD HH:mm")}
+                  </div>
+                  <div style={{ color: "#999", fontSize: 12, marginTop: 2 }}>
+                    {esc.reason}
+                  </div>
+                </div>
+              ),
+            }))}
+          />
+        )}
       </Modal>
     </div>
   );

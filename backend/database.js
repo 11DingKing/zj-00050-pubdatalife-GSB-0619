@@ -111,7 +111,69 @@ const initDatabase = () => {
       FOREIGN KEY (warning_id) REFERENCES risk_warnings(id),
       FOREIGN KEY (asset_id) REFERENCES assets(id)
     );
+
+    CREATE TABLE IF NOT EXISTS warning_escalations (
+      id TEXT PRIMARY KEY,
+      warning_id TEXT NOT NULL,
+      from_level TEXT NOT NULL,
+      to_level TEXT NOT NULL,
+      reason TEXT,
+      escalated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (warning_id) REFERENCES risk_warnings(id)
+    );
   `);
+
+  const columns = db.prepare("PRAGMA table_info(risk_warnings)").all();
+  const columnNames = columns.map((c) => c.name);
+
+  const alterStatements = [];
+  if (!columnNames.includes("original_risk_level")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN original_risk_level TEXT",
+    );
+  }
+  if (!columnNames.includes("last_escalated_at")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN last_escalated_at TEXT",
+    );
+  }
+  if (!columnNames.includes("escalation_count")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN escalation_count INTEGER DEFAULT 0",
+    );
+  }
+  if (!columnNames.includes("rectification_result")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN rectification_result TEXT",
+    );
+  }
+  if (!columnNames.includes("review_status")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN review_status TEXT",
+    );
+  }
+  if (!columnNames.includes("reviewed_at")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN reviewed_at TEXT",
+    );
+  }
+  if (!columnNames.includes("reviewer_id")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN reviewer_id TEXT",
+    );
+  }
+  if (!columnNames.includes("review_remark")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN review_remark TEXT",
+    );
+  }
+  if (!columnNames.includes("handled_at")) {
+    alterStatements.push(
+      "ALTER TABLE risk_warnings ADD COLUMN handled_at TEXT",
+    );
+  }
+
+  alterStatements.forEach((sql) => db.exec(sql));
 
   console.log("数据库初始化完成");
 };
