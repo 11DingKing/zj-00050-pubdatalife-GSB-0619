@@ -111,7 +111,48 @@ const initDatabase = () => {
       FOREIGN KEY (warning_id) REFERENCES risk_warnings(id),
       FOREIGN KEY (asset_id) REFERENCES assets(id)
     );
+
+    CREATE TABLE IF NOT EXISTS escalation_logs (
+      id TEXT PRIMARY KEY,
+      warning_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      from_level TEXT NOT NULL,
+      to_level TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (warning_id) REFERENCES risk_warnings(id),
+      FOREIGN KEY (asset_id) REFERENCES assets(id)
+    );
   `);
+
+  const warningCols = db.prepare("PRAGMA table_info(risk_warnings)").all();
+  const colNames = warningCols.map((c) => c.name);
+  if (!colNames.includes("escalated_level")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN escalated_level TEXT");
+  }
+  if (!colNames.includes("escalation_count")) {
+    db.exec(
+      "ALTER TABLE risk_warnings ADD COLUMN escalation_count INTEGER DEFAULT 0",
+    );
+  }
+  if (!colNames.includes("last_escalated_at")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN last_escalated_at TEXT");
+  }
+  if (!colNames.includes("rectification_result")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN rectification_result TEXT");
+  }
+  if (!colNames.includes("review_status")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN review_status TEXT");
+  }
+  if (!colNames.includes("review_remark")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN review_remark TEXT");
+  }
+  if (!colNames.includes("reviewed_at")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN reviewed_at TEXT");
+  }
+  if (!colNames.includes("reviewer_id")) {
+    db.exec("ALTER TABLE risk_warnings ADD COLUMN reviewer_id TEXT");
+  }
 
   console.log("数据库初始化完成");
 };

@@ -9,6 +9,9 @@ const {
   RISK_WEIGHTS,
   WARNING_STATUS,
   STAGE_STATUS,
+  RISK_LEVEL_ORDER,
+  SLA_PENDING_ESCALATION_DAYS,
+  REVIEW_STATUS,
 } = require("../models");
 
 function calculateOverdueDaysScore(overdueDays) {
@@ -66,6 +69,84 @@ function getSuggestedActions(riskLevel, overdueDays, stageStuckDays) {
   }
 
   return actions.join("；");
+}
+
+function escalateLevel(level) {
+  const idx = RISK_LEVEL_ORDER.indexOf(level);
+  if (idx < 0) return level;
+  if (idx >= RISK_LEVEL_ORDER.length - 1) return level;
+  return RISK_LEVEL_ORDER[idx + 1];
+}
+
+function applySlaEscalation(warning) {
+  if (!warning) return warning;
+  if (warning.status !== WARNING_STATUS.PENDING) return warning;
+
+  const baseLevel = warning.escalated_level || warning.risk_level;
+  if (baseLevel === "critical") return warning;
+
+  const baseTimeStr = warning.last_escalated_at || warning.created_at;
+  if (!baseTimeStr) return warning;
+
+  const baseTime = new Date(baseTimeStr);
+  const now = new Date();
+  const elapsedDays = Math.floor((now - baseTime) / (1000 * 60 * 60 * 24));
+
+  if (elapsedDays < SLA_PENDING_ESCALATION_DAYS) return warning;
+
+  const stepCount = Math.floor(elapsedDays / SLA_PENDING_ESCALATION_DAYS);
+  let currentLevel = baseLevel;
+  let appliedSteps = 0;
+  for (let i = 0; i < stepCount; i++) {
+    const next = escalateLevel(currentLevel);
+    if (next === currentLevel) break;
+    currentLevel = next;
+    appliedSteps += 1;
+  }
+
+  if (appliedSteps === 0) return warning;
+
+  const nowIso = now.toISOString();
+  const newCount = (warning.escalation_count || 0) + appliedSteps;
+
+  let priorLevel = warning.escalated_level || warning.risk_level;
+  for (let i = 0; i < appliedSteps; i++) {
+    const nextLevel = escalateLevel(priorLevel);
+    db.prepare(
+      `INSERT INTO escalation_logs (id, warning_id, asset_id, from_level, to_level, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      uuidv4(),
+      warning.id,
+      warning.asset_id,
+      priorLevel,
+      nextLevel,
+      `pending 状态超过 ${SLA_PENDING_ESCALATION_DAYS} 天未进入处置，自动升级`,
+      nowIso,
+    );
+    priorLevel = nextLevel;
+  }
+
+  db.prepare(
+    `UPDATE risk_warnings
+     SET escalated_level = ?, escalation_count = ?, last_escalated_at = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(currentLevel, newCount, nowIso, nowIso, warning.id);
+
+  return {
+    ...warning,
+    escalated_level: currentLevel,
+    escalation_count: newCount,
+    last_escalated_at: nowIso,
+    updated_at: nowIso,
+  };
+}
+
+function ensureWarningSla(warningId) {
+  const warning = db
+    .prepare("SELECT * FROM risk_warnings WHERE id = ?")
+    .get(warningId);
+  return applySlaEscalation(warning);
 }
 
 const riskService = {
@@ -204,7 +285,7 @@ const riskService = {
       .prepare(
         `
       SELECT * FROM risk_warnings 
-      WHERE asset_id = ? AND status IN ('pending', 'handling')
+      WHERE asset_id = ? AND status IN ('pending', 'handling', 'reviewing')
       ORDER BY created_at DESC
       LIMIT 1
     `,
@@ -266,16 +347,29 @@ const riskService = {
         db.prepare(
           `
           UPDATE risk_warnings 
-          SET status = 'resolved', updated_at = ?, handled_at = ?
+          SET status = 'resolved', updated_at = ?, handled_at = ?,
+              review_status = ?, review_remark = ?
           WHERE id = ?
         `,
-        ).run(now, now, existingWarning.id);
+        ).run(
+          now,
+          now,
+          REVIEW_STATUS.APPROVED,
+          "风险评分回归阈值以上，系统自动闭环",
+          existingWarning.id,
+        );
       }
       return { ...riskData, warningId: null, isWarning: false };
     }
   },
 
-  handleWarning(warningId, actionType, remark, operatorId) {
+  handleWarning(
+    warningId,
+    actionType,
+    remark,
+    operatorId,
+    rectificationResult,
+  ) {
     if (!actionType) {
       throw new ValidationError("请指定处置类型");
     }
@@ -285,6 +379,17 @@ const riskService = {
       .get(warningId);
     if (!warning) {
       throw new NotFoundError("预警不存在");
+    }
+
+    if (warning.status === WARNING_STATUS.RESOLVED) {
+      throw new ValidationError("预警已闭环，不能再次处置");
+    }
+
+    applySlaEscalation(warning);
+
+    const trimmedResult = (rectificationResult || "").trim();
+    if (!trimmedResult) {
+      throw new ValidationError("请填写整改结果，处置必须形成闭环");
     }
 
     const now = new Date().toISOString();
@@ -349,16 +454,96 @@ const riskService = {
     db.prepare(
       `
       UPDATE risk_warnings 
-      SET status = 'handling', updated_at = ?, handling_remark = ?
+      SET status = ?, updated_at = ?, handling_remark = ?,
+          rectification_result = ?, review_status = ?, handled_at = ?
       WHERE id = ?
     `,
-    ).run(now, remark || "", warningId);
+    ).run(
+      WARNING_STATUS.REVIEWING,
+      now,
+      remark || "",
+      trimmedResult,
+      REVIEW_STATUS.PENDING,
+      now,
+      warningId,
+    );
 
     return {
       success: true,
-      message: "处置已记录，风险评分已重新计算",
+      message: "处置已记录，待复核确认后才会闭环",
       updatedRisk,
       handlingRecordId: recordId,
+      reviewStatus: REVIEW_STATUS.PENDING,
+    };
+  },
+
+  reviewWarning(warningId, decision, reviewRemark, reviewerId) {
+    if (!decision) {
+      throw new ValidationError("请指定复核结论");
+    }
+    if (
+      decision !== REVIEW_STATUS.APPROVED &&
+      decision !== REVIEW_STATUS.REJECTED
+    ) {
+      throw new ValidationError("复核结论无效");
+    }
+
+    const warning = db
+      .prepare("SELECT * FROM risk_warnings WHERE id = ?")
+      .get(warningId);
+    if (!warning) {
+      throw new NotFoundError("预警不存在");
+    }
+    if (warning.status !== WARNING_STATUS.REVIEWING) {
+      throw new ValidationError("仅待复核的预警可以复核");
+    }
+    if (!warning.rectification_result) {
+      throw new ValidationError("缺少整改结果，无法复核");
+    }
+
+    const now = new Date().toISOString();
+
+    if (decision === REVIEW_STATUS.APPROVED) {
+      db.prepare(
+        `UPDATE risk_warnings
+         SET status = ?, review_status = ?, review_remark = ?,
+             reviewed_at = ?, reviewer_id = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        WARNING_STATUS.RESOLVED,
+        REVIEW_STATUS.APPROVED,
+        reviewRemark || "",
+        now,
+        reviewerId || null,
+        now,
+        warningId,
+      );
+      return {
+        success: true,
+        message: "复核通过，预警已闭环",
+        status: WARNING_STATUS.RESOLVED,
+      };
+    }
+
+    db.prepare(
+      `UPDATE risk_warnings
+       SET status = ?, review_status = ?, review_remark = ?,
+           reviewed_at = ?, reviewer_id = ?, updated_at = ?,
+           rectification_result = NULL
+       WHERE id = ?`,
+    ).run(
+      WARNING_STATUS.PENDING,
+      REVIEW_STATUS.REJECTED,
+      reviewRemark || "",
+      now,
+      reviewerId || null,
+      now,
+      warningId,
+    );
+    return {
+      success: true,
+      message: "复核未通过，预警已退回重新处置",
+      status: WARNING_STATUS.PENDING,
     };
   },
 
@@ -385,11 +570,6 @@ const riskService = {
       params.push(filters.dept_id);
     }
 
-    if (filters.risk_level) {
-      query += " AND rw.risk_level = ?";
-      params.push(filters.risk_level);
-    }
-
     if (filters.stage) {
       query += " AND a.current_stage = ?";
       params.push(filters.stage);
@@ -399,12 +579,29 @@ const riskService = {
       query += " AND rw.status = ?";
       params.push(filters.status);
     } else {
-      query += " AND rw.status IN ('pending', 'handling')";
+      query += " AND rw.status IN ('pending', 'handling', 'reviewing')";
     }
 
     query += " ORDER BY rw.risk_score ASC, rw.created_at DESC";
 
-    const warnings = db.prepare(query).all(...params);
+    const rawWarnings = db.prepare(query).all(...params);
+
+    const warnings = rawWarnings.map((w) => {
+      const updated = applySlaEscalation(w) || w;
+      const effectiveLevel = updated.escalated_level || updated.risk_level;
+      return {
+        ...updated,
+        effective_risk_level: effectiveLevel,
+        is_escalated: (updated.escalation_count || 0) > 0,
+      };
+    });
+
+    if (filters.risk_level) {
+      const filtered = warnings.filter(
+        (w) => w.effective_risk_level === filters.risk_level,
+      );
+      return { warnings: filtered };
+    }
 
     return { warnings };
   },
@@ -415,7 +612,7 @@ const riskService = {
       throw new NotFoundError("资产不存在");
     }
 
-    const warnings = db
+    const rawWarnings = db
       .prepare(
         `
       SELECT * FROM risk_warnings 
@@ -425,6 +622,16 @@ const riskService = {
     `,
       )
       .all(assetId);
+
+    const warnings = rawWarnings.map((w) => {
+      const updated =
+        w.status === WARNING_STATUS.PENDING ? applySlaEscalation(w) || w : w;
+      return {
+        ...updated,
+        effective_risk_level: updated.escalated_level || updated.risk_level,
+        is_escalated: (updated.escalation_count || 0) > 0,
+      };
+    });
 
     const handlingRecords = db
       .prepare(
@@ -438,10 +645,19 @@ const riskService = {
       )
       .all(assetId);
 
+    const escalationLogs = db
+      .prepare(
+        `SELECT * FROM escalation_logs
+         WHERE asset_id = ?
+         ORDER BY created_at DESC`,
+      )
+      .all(assetId);
+
     return {
       ...riskData,
       warnings,
       handlingRecords,
+      escalationLogs,
       hasWarning: riskData.riskScore < RISK_THRESHOLD,
     };
   },
@@ -449,13 +665,17 @@ const riskService = {
   getRiskOverview(filters = {}) {
     const allWarnings = this.getAllRiskWarnings(filters).warnings;
 
+    const levelOf = (w) => w.effective_risk_level || w.risk_level;
+
     const stats = {
       total: allWarnings.length,
-      critical: allWarnings.filter((w) => w.risk_level === "critical").length,
-      high: allWarnings.filter((w) => w.risk_level === "high").length,
-      medium: allWarnings.filter((w) => w.risk_level === "medium").length,
+      critical: allWarnings.filter((w) => levelOf(w) === "critical").length,
+      high: allWarnings.filter((w) => levelOf(w) === "high").length,
+      medium: allWarnings.filter((w) => levelOf(w) === "medium").length,
       pending: allWarnings.filter((w) => w.status === "pending").length,
       handling: allWarnings.filter((w) => w.status === "handling").length,
+      reviewing: allWarnings.filter((w) => w.status === "reviewing").length,
+      escalated: allWarnings.filter((w) => w.is_escalated).length,
     };
 
     return { stats, warnings: allWarnings.slice(0, 10) };
@@ -465,18 +685,22 @@ const riskService = {
     const warnings = db
       .prepare(
         `
-      SELECT asset_id, risk_level, risk_score
+      SELECT *
       FROM risk_warnings
-      WHERE status IN ('pending', 'handling')
+      WHERE status IN ('pending', 'handling', 'reviewing')
     `,
       )
       .all();
 
     const assetWarningMap = {};
     warnings.forEach((w) => {
-      assetWarningMap[w.asset_id] = {
-        risk_level: w.risk_level,
-        risk_score: w.risk_score,
+      const updated = applySlaEscalation(w) || w;
+      assetWarningMap[updated.asset_id] = {
+        risk_level: updated.escalated_level || updated.risk_level,
+        original_risk_level: updated.risk_level,
+        risk_score: updated.risk_score,
+        is_escalated: (updated.escalation_count || 0) > 0,
+        status: updated.status,
       };
     });
 
@@ -490,6 +714,7 @@ module.exports = {
     riskService.calculateAssetRiskScore.bind(riskService),
   updateAssetRiskWarning: riskService.updateAssetRiskWarning.bind(riskService),
   handleWarning: riskService.handleWarning.bind(riskService),
+  reviewWarning: riskService.reviewWarning.bind(riskService),
   getAllRiskWarnings: riskService.getAllRiskWarnings.bind(riskService),
   getAssetRiskInfo: riskService.getAssetRiskInfo.bind(riskService),
   RISK_THRESHOLD,
