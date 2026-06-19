@@ -26,17 +26,29 @@ function checkAndApplySlaEscalation(warning) {
     return { escalated: false, warning };
   }
 
+  if (!warning.id || !warning.created_at || !warning.asset_id) {
+    return { escalated: false, warning };
+  }
+
   const createdAt = new Date(warning.created_at);
+  if (isNaN(createdAt.getTime())) {
+    return { escalated: false, warning };
+  }
+
   const lastEscalatedAt = warning.last_escalated_at
     ? new Date(warning.last_escalated_at)
     : createdAt;
+  if (isNaN(lastEscalatedAt.getTime())) {
+    return { escalated: false, warning };
+  }
+
   const now = new Date();
 
   const daysSinceLastCheck = Math.floor(
     (now - lastEscalatedAt) / (1000 * 60 * 60 * 24),
   );
 
-  if (daysSinceLastCheck < SLA_UPGRADE_DAYS) {
+  if (isNaN(daysSinceLastCheck) || daysSinceLastCheck < SLA_UPGRADE_DAYS) {
     return { escalated: false, warning };
   }
 
@@ -717,7 +729,7 @@ const riskService = {
     let warnings = db
       .prepare(
         `
-      SELECT asset_id, risk_level, risk_score, status, escalation_count
+      SELECT *
       FROM risk_warnings
       WHERE status IN ('pending', 'handling', 'reviewing')
     `,
