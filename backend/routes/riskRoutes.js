@@ -13,6 +13,13 @@ const riskRoutes = async (fastify, options) => {
     return riskService.getAllRiskWarnings(filters);
   });
 
+  fastify.get(
+    "/warnings/:warningId/escalation-logs",
+    async (request, reply) => {
+      return riskService.getEscalationLogs(request.params.warningId);
+    },
+  );
+
   fastify.get("/asset/:assetId", async (request, reply) => {
     const riskInfo = riskService.getAssetRiskInfo(request.params.assetId);
     return riskInfo;
@@ -27,6 +34,37 @@ const riskRoutes = async (fastify, options) => {
       action_type,
       remark,
       operator_id,
+    );
+
+    return result;
+  });
+
+  fastify.post(
+    "/warnings/:warningId/submit-rectification",
+    async (request, reply) => {
+      const { warningId } = request.params;
+      const { rectification_result, remark, operator_id } = request.body;
+
+      const result = riskService.submitRectification(
+        warningId,
+        rectification_result,
+        remark,
+        operator_id,
+      );
+
+      return result;
+    },
+  );
+
+  fastify.post("/warnings/:warningId/review", async (request, reply) => {
+    const { warningId } = request.params;
+    const { approved, review_remark, reviewer_id } = request.body;
+
+    const result = riskService.reviewWarning(
+      warningId,
+      approved,
+      review_remark,
+      reviewer_id,
     );
 
     return result;

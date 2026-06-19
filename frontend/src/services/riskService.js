@@ -9,12 +9,33 @@ export const riskService = {
     return request(url);
   },
 
+  async getEscalationLogs(warningId) {
+    return request(`${API_BASE}/risk/warnings/${warningId}/escalation-logs`);
+  },
+
   async getAssetRiskInfo(assetId) {
     return request(`${API_BASE}/risk/asset/${assetId}`);
   },
 
   async handleWarning(warningId, data) {
     return request(`${API_BASE}/risk/warnings/${warningId}/handle`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  async submitRectification(warningId, data) {
+    return request(
+      `${API_BASE}/risk/warnings/${warningId}/submit-rectification`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
+  },
+
+  async reviewWarning(warningId, data) {
+    return request(`${API_BASE}/risk/warnings/${warningId}/review`, {
       method: "POST",
       body: JSON.stringify(data),
     });
