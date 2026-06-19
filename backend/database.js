@@ -86,6 +86,7 @@ const initDatabase = () => {
       asset_id TEXT NOT NULL,
       risk_score REAL NOT NULL,
       risk_level TEXT NOT NULL,
+      original_risk_level TEXT,
       overdue_days INTEGER DEFAULT 0,
       stage_stuck_days INTEGER DEFAULT 0,
       response_speed_score REAL DEFAULT 0,
@@ -95,6 +96,12 @@ const initDatabase = () => {
       handled_by TEXT,
       handled_at TEXT,
       handling_remark TEXT,
+      rectification_result TEXT,
+      escalation_count INTEGER DEFAULT 0,
+      last_escalated_at TEXT,
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      review_remark TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (asset_id) REFERENCES assets(id)
@@ -111,7 +118,58 @@ const initDatabase = () => {
       FOREIGN KEY (warning_id) REFERENCES risk_warnings(id),
       FOREIGN KEY (asset_id) REFERENCES assets(id)
     );
+
+    CREATE TABLE IF NOT EXISTS sla_escalation_logs (
+      id TEXT PRIMARY KEY,
+      warning_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      old_level TEXT NOT NULL,
+      new_level TEXT NOT NULL,
+      reason TEXT,
+      days_pending INTEGER NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (warning_id) REFERENCES risk_warnings(id),
+      FOREIGN KEY (asset_id) REFERENCES assets(id)
+    );
   `);
+
+  const ensureColumn = (tableName, columnName, columnDef) => {
+    const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    const exists = columns.some((c) => c.name === columnName);
+    if (!exists) {
+      db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
+    }
+  };
+
+  ensureColumn("risk_warnings", "original_risk_level", "TEXT");
+  ensureColumn("risk_warnings", "rectification_result", "TEXT");
+  ensureColumn("risk_warnings", "escalation_count", "INTEGER DEFAULT 0");
+  ensureColumn("risk_warnings", "last_escalated_at", "TEXT");
+  ensureColumn("risk_warnings", "reviewed_by", "TEXT");
+  ensureColumn("risk_warnings", "reviewed_at", "TEXT");
+  ensureColumn("risk_warnings", "review_remark", "TEXT");
+
+  const tableExists = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='sla_escalation_logs'",
+    )
+    .get();
+  if (!tableExists) {
+    db.exec(`
+      CREATE TABLE sla_escalation_logs (
+        id TEXT PRIMARY KEY,
+        warning_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        old_level TEXT NOT NULL,
+        new_level TEXT NOT NULL,
+        reason TEXT,
+        days_pending INTEGER NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (warning_id) REFERENCES risk_warnings(id),
+        FOREIGN KEY (asset_id) REFERENCES assets(id)
+      )
+    `);
+  }
 
   console.log("数据库初始化完成");
 };
